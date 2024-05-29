@@ -4,23 +4,16 @@ from flask_bcrypt import Bcrypt
 from flask_sqlalchemy import SQLAlchemy
 from flask_restful import Api, Resource
 from flask import Flask, request, jsonify
-print("Starting Flask server...")
-
-
-print("Imported all modules...")
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
 app.config['SECRET_KEY'] = 'your_secret_key'
 app.config['JWT_SECRET_KEY'] = 'your_jwt_secret_key'
 
-
 api = Api(app)
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
 jwt = JWTManager(app)
-
-# Defines a model to store user information
 
 
 class User(db.Model):
@@ -30,26 +23,19 @@ class User(db.Model):
     password = db.Column(db.String(120), nullable=False)
 
 
-print("Defined User model...")
-
-# Defines a resource to handle POST requests for user registration
-
-
 class Register(Resource):
     def post(self):
         data = request.get_json()
+        if User.query.filter_by(email=data['email']).first():
+            return {'message': 'User with this email already exists'}, 400
+
         hashed_password = bcrypt.generate_password_hash(
             data['password']).decode('utf-8')
         new_user = User(username=data['username'],
                         email=data['email'], password=hashed_password)
         db.session.add(new_user)
         db.session.commit()
-        return jsonify({'message': 'User registered successfully'})
-
-
-print("Defined Register resource...")
-
-# Defines a resource to handle POST request for user login
+        return {'message': 'User registered successfully'}, 201
 
 
 class Login(Resource):
@@ -59,25 +45,35 @@ class Login(Resource):
         if user and bcrypt.check_password_hash(user.password, data['password']):
             access_token = create_access_token(
                 identity={'username': user.username, 'email': user.email})
-            return jsonify({'token': access_token})
-        return jsonify({'message': 'Invalid credentials'}), 401
-
-
-print("Defined Login resource...")
-
-# Defines a reouse to handle GET requests for retrieving the authenticated users profile
+            return {'token': access_token}, 200
+        return {'message': 'Invalid credentials'}, 401
 
 
 class Profile(Resource):
     @jwt_required()
     def get(self):
-        current_user = get_jwt_identity
-        return jsonify({'user': current_user})
+        current_user = get_jwt_identity()
+        user = User.query.filter_by(email=current_user['email']).first()
+        if not user:
+            return {'message': 'User not found'}, 404
+
+        user_data = {
+            'username': user.username,
+            'email': user.email
+        }
+        return user_data, 200
 
 
-print("Defined Profile resource...")
-
-# Defines a resoruce to handle POST requests for creating events and GET request for retrieving specific event
+class Event(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(120), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    date = db.Column(db.DateTime, nullable=False)
+    location = db.Column(db.String(120), nullable=False)
+    organizer_id = db.Column(
+        db.Integer, db.ForeignKey('user.id'), nullable=False)
+    organizer = db.relationship(
+        'User', backref=db.backref('events', lazy=True))
 
 
 class EventResource(Resource):
@@ -88,29 +84,24 @@ class EventResource(Resource):
         new_event = Event(
             title=data['title'],
             description=data['description'],
-            data=datetime.strptime(data['date'], '%Y-%m-%d %H:%M:%S'),
+            date=datetime.strptime(data['date'], '%Y-%m-%d %H:%M:%S'),
             location=data['location'],
             organizer_id=current_user['id']
         )
         db.session.add(new_event)
         db.session.commit()
-        return jsonify({'message': 'Event created successfully'})
+        return {'message': 'Event created successfully'}, 201
 
-    @jwt_required
+    @jwt_required()
     def get(self, event_id):
         event = Event.query.get_or_404(event_id)
-        return jsonify({
+        return {
             'title': event.title,
             'description': event.description,
             'date': event.date.strftime('%Y-%m-%d %H:%M:%S'),
             'location': event.location,
             'organizer_id': event.organizer_id
-        })
-
-
-print("Defined EventResource resource...")
-
-# Defines a resource to handle GET requets for retrieving a list of all events
+        }, 200
 
 
 class EventListResource(Resource):
@@ -125,32 +116,16 @@ class EventListResource(Resource):
             'location': event.location,
             'organizer_id': event.organizer_id
         } for event in events]
-        return jsonify(event_list)
+        return event_list, 200
 
 
-# Defines a model to store event information
-class Event(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    title = db.Column(db.String(120), nullable=False)
-    description = db.Column(db.Text, nullable=True)
-    date = db.Column(db.DateTime, nullable=False)
-    location = db.Column(db.String(120), nullable=False)
-    organizer_id = db.Column(
-        db.Integer, db.ForeignKey('user.id'), nullable=False)
-    organizer = db.relationship(
-        'User', backref=db.backref('events', lazy=True))
-
-
-# Add API resources
 api.add_resource(Register, '/register')
 api.add_resource(Login, '/login')
 api.add_resource(Profile, '/profile')
-
-print("Added API resources...")
+api.add_resource(EventResource, '/events', '/events/<int:event_id>')
+api.add_resource(EventListResource, '/events')
 
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-        print("Created database tables...")
-    print("Flask server is running...")
     app.run(debug=True)
